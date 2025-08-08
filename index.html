@@ -3,21 +3,30 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Local IPA Packager with Text File Creator</title>
+<title>Configurable Local IPA Packager</title>
 <style>
   textarea { width: 100%; height: 120px; font-family: monospace; }
   input[type=text] { width: 100%; }
+  label { font-weight: bold; }
+  button { margin: 4px 0; }
 </style>
 </head>
 <body>
   <h2>Local IPA Packager (No Build, No Sign)</h2>
 
+  <label for="baseFolderInput">Base folder inside IPA (e.g. Payload):</label><br/>
+  <input type="text" id="baseFolderInput" value="Payload" /><br/><br/>
+
+  <label for="appNameInput">App folder name (e.g. YourApp.app):</label><br/>
+  <input type="text" id="appNameInput" value="YourApp.app" /><br/><br/>
+
   <input type="file" id="fileInput" webkitdirectory multiple />
   <button id="addFilesBtn">Add Files/Folder to Storage</button>
+  <button id="clearStorageBtn" style="margin-left: 20px;">Clear Storage</button>
   <hr />
 
   <h3>Create/Edit Text File</h3>
-  <label>File path inside app (relative to YourApp.app, e.g. Info.plist or folder/file.txt):</label><br/>
+  <label>File path inside app folder (e.g. Info.plist or folder/file.txt):</label><br/>
   <input type="text" id="newFilePath" placeholder="e.g. Info.plist" /><br/><br/>
   <label>File content (text only):</label><br/>
   <textarea id="newFileContent" placeholder="Write your file content here..."></textarea><br/>
@@ -33,14 +42,16 @@
   <script>
     const fileInput = document.getElementById('fileInput');
     const addFilesBtn = document.getElementById('addFilesBtn');
+    const clearStorageBtn = document.getElementById('clearStorageBtn');
     const downloadIpaBtn = document.getElementById('downloadIpaBtn');
     const fileList = document.getElementById('fileList');
     const newFilePath = document.getElementById('newFilePath');
     const newFileContent = document.getElementById('newFileContent');
     const addTextFileBtn = document.getElementById('addTextFileBtn');
+    const baseFolderInput = document.getElementById('baseFolderInput');
+    const appNameInput = document.getElementById('appNameInput');
 
     const STORAGE_KEY = 'localIpaFiles';
-    const APP_NAME = 'YourApp'; // Change to your app's name exactly (YourApp.app folder)
 
     // Load stored files: array of { path: string, base64: string }
     function loadStoredFiles() {
@@ -74,6 +85,18 @@
       });
     }
 
+    // Build full internal path for stored files
+    function buildFullPath(relativePath) {
+      const baseFolder = baseFolderInput.value.trim() || 'Payload';
+      const appName = appNameInput.value.trim() || 'YourApp.app';
+      // If relativePath already starts with baseFolder/appName, avoid double prefix
+      if (relativePath.startsWith(baseFolder + '/' + appName)) {
+        return relativePath;
+      }
+      // Else prefix
+      return `${baseFolder}/${appName}/${relativePath}`;
+    }
+
     addFilesBtn.onclick = async () => {
       if (!fileInput.files.length) {
         alert('Select files or folders first');
@@ -83,10 +106,10 @@
 
       for (const file of fileInput.files) {
         // file.webkitRelativePath includes folder structure relative to root folder you selected
-        // We want to place all files under Payload/YourApp.app/
-        const relativePath = `Payload/${APP_NAME}.app/${file.webkitRelativePath}`;
+        const relativePath = file.webkitRelativePath;
+        const fullPath = buildFullPath(relativePath);
         const base64 = await fileToBase64(file);
-        storedFiles.push({ path: relativePath, base64 });
+        storedFiles.push({ path: fullPath, base64 });
       }
 
       saveStoredFiles(storedFiles);
@@ -103,8 +126,8 @@
         return;
       }
       const storedFiles = loadStoredFiles();
-      // Add the file under Payload/YourApp.app/ path
-      const fullPath = `Payload/${APP_NAME}.app/${path}`;
+
+      const fullPath = buildFullPath(path);
 
       // Convert text content to base64 (UTF-8)
       const base64 = btoa(unescape(encodeURIComponent(content)));
@@ -115,6 +138,14 @@
       alert('Text file added!');
       newFilePath.value = '';
       newFileContent.value = '';
+    };
+
+    clearStorageBtn.onclick = () => {
+      if(confirm('Are you sure you want to clear all stored files? This cannot be undone.')) {
+        localStorage.removeItem(STORAGE_KEY);
+        updateFileList();
+        alert('Storage cleared.');
+      }
     };
 
     downloadIpaBtn.onclick = async () => {
@@ -130,11 +161,20 @@
         zip.file(f.path, f.base64, { base64: true });
       }
 
+      const baseFolder = baseFolderInput.value.trim() || 'Payload';
+      const appName = appNameInput.value.trim() || 'YourApp.app';
+
+      // Just to be sure, check that at least one file is inside baseFolder/appName folder
+      const hasAppFolder = files.some(f => f.path.startsWith(baseFolder + '/' + appName + '/'));
+      if (!hasAppFolder) {
+        alert(`Warning: None of the files are inside the folder ${baseFolder}/${appName}/`);
+      }
+
       const content = await zip.generateAsync({ type: 'blob' });
       const url = URL.createObjectURL(content);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${APP_NAME}.ipa`;
+      a.download = `${appName.replace(/[^a-z0-9]/gi,'_').toLowerCase()}.ipa`;
       a.click();
       URL.revokeObjectURL(url);
     };
