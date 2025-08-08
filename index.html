@@ -25,9 +25,9 @@
   <button id="addFilesBtn">Add Files/Folder to Storage</button>
   <br/><br/>
 
-  <label><strong>Or upload entire .app folder:</strong></label><br/>
-  <input type="file" id="appFolderInput" webkitdirectory multiple />
-  <button id="addAppFolderBtn">Add .app Folder to Storage</button>
+  <label><strong>Or upload entire .app file (zip archive or app bundle):</strong></label><br/>
+  <input type="file" id="appFileInput" accept=".app,.zip" />
+  <button id="addAppFileBtn">Add .app File to Storage</button>
   <br/><br/>
 
   <button id="clearStorageBtn" style="margin-left: 0;">Clear Storage</button>
@@ -50,8 +50,8 @@
   <script>
     const fileInput = document.getElementById('fileInput');
     const addFilesBtn = document.getElementById('addFilesBtn');
-    const appFolderInput = document.getElementById('appFolderInput');
-    const addAppFolderBtn = document.getElementById('addAppFolderBtn');
+    const appFileInput = document.getElementById('appFileInput');
+    const addAppFileBtn = document.getElementById('addAppFileBtn');
     const clearStorageBtn = document.getElementById('clearStorageBtn');
     const downloadIpaBtn = document.getElementById('downloadIpaBtn');
     const fileList = document.getElementById('fileList');
@@ -63,18 +63,15 @@
 
     const STORAGE_KEY = 'localIpaFiles';
 
-    // Load stored files: array of { path: string, base64: string }
     function loadStoredFiles() {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? JSON.parse(raw) : [];
     }
 
-    // Save files array to localStorage
     function saveStoredFiles(files) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(files));
     }
 
-    // Update file list UI
     function updateFileList() {
       const files = loadStoredFiles();
       fileList.innerHTML = '';
@@ -85,7 +82,6 @@
       });
     }
 
-    // Convert file to base64
     function fileToBase64(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -95,7 +91,6 @@
       });
     }
 
-    // Build full internal path for stored files
     function buildFullPath(relativePath) {
       const baseFolder = baseFolderInput.value.trim() || 'Payload';
       const appName = appNameInput.value.trim() || 'YourApp.app';
@@ -125,54 +120,70 @@
       fileInput.value = '';
     };
 
-    addAppFolderBtn.onclick = async () => {
-      if (!appFolderInput.files.length) {
-        alert('Select the .app folder first');
+    addAppFileBtn.onclick = async () => {
+      if (!appFileInput.files.length) {
+        alert('Select a .app file first');
         return;
       }
+      const file = appFileInput.files[0];
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const zip = await JSZip.loadAsync(arrayBuffer);
 
-      // Determine the root .app folder name
-      // All files will share the same root folder at the start of webkitRelativePath
-      // e.g. MyApp.app/Info.plist or MyApp.app/Frameworks/... etc.
-      let rootAppFolderName = null;
-      for (const file of appFolderInput.files) {
-        const parts = file.webkitRelativePath.split('/');
-        if (parts.length > 0 && parts[0].endsWith('.app')) {
-          rootAppFolderName = parts[0];
-          break;
+        // Find root .app folder inside zip
+        let rootAppFolderName = null;
+        for (const name of Object.keys(zip.files)) {
+          if (name.endsWith('.app/') || name.endsWith('.app/')) {
+            rootAppFolderName = name.split('/')[0]; // folder name with .app
+            break;
+          }
         }
-      }
-      if (!rootAppFolderName) {
-        alert('Could not detect root .app folder name in selection!');
-        return;
-      }
-
-      // Update appNameInput with detected app folder name
-      appNameInput.value = rootAppFolderName;
-
-      const storedFiles = loadStoredFiles();
-
-      const baseFolder = baseFolderInput.value.trim() || 'Payload';
-
-      for (const file of appFolderInput.files) {
-        let relativePath = file.webkitRelativePath;
-        // Remove the root app folder name from path (to avoid doubling it)
-        // Because buildFullPath will add baseFolder/appName anyway
-        if (relativePath.startsWith(rootAppFolderName + '/')) {
-          relativePath = relativePath.substring(rootAppFolderName.length + 1);
-        } else if (relativePath === rootAppFolderName) {
-          // If it is the root app folder itself, skip (no file)
-          continue;
+        if (!rootAppFolderName) {
+          // fallback: try to find first folder with .app in name
+          for (const name of Object.keys(zip.files)) {
+            const parts = name.split('/');
+            if (parts.length && parts[0].endsWith('.app')) {
+              rootAppFolderName = parts[0];
+              break;
+            }
+          }
         }
-        const fullPath = `${baseFolder}/${rootAppFolderName}/${relativePath}`;
-        const base64 = await fileToBase64(file);
-        storedFiles.push({ path: fullPath, base64 });
-      }
 
-      saveStoredFiles(storedFiles);
-      updateFileList();
-      alert(`.app folder "${rootAppFolderName}" added to storage!`);
-      appFolderInput.value = '';
+        if (!rootAppFolderName) {
+          alert('Could not detect root .app folder name in the archive!');
+          return;
+        }
+
+        appNameInput.value = rootAppFolderName;
+
+        const storedFiles = loadStoredFiles();
+        const baseFolder = baseFolderInput.value.trim() || 'Payload';
+
+        for (const fileName of Object.keys(zip.files)) {
+          if (zip.files[fileName].dir) continue; // skip directories
+
+          // Remove rootAppFolderName prefix if exists
+          let relativePath = fileName;
+          if (relativePath.startsWith(rootAppFolderName + '/')) {
+            relativePath = relativePath.substring(rootAppFolderName.length + 1);
+          } else if (relativePath === rootAppFolderName) {
+            continue; // skip root folder itself
+          }
+
+          const fullPath = `${baseFolder}/${rootAppFolderName}/${relativePath}`;
+
+          const fileData = await zip.files[fileName].async('base64');
+          storedFiles.push({ path: fullPath, base64: fileData });
+        }
+
+        saveStoredFiles(storedFiles);
+        updateFileList();
+        alert(`.app archive "${rootAppFolderName}" added to storage!`);
+        appFileInput.value = '';
+
+      } catch (err) {
+        alert('Error reading or unzipping .app file: ' + err);
+      }
     };
 
     addTextFileBtn.onclick = () => {
@@ -222,19 +233,18 @@
 
       const hasAppFolder = files.some(f => f.path.startsWith(baseFolder + '/' + appName + '/'));
       if (!hasAppFolder) {
-        alert(`Warning: None of the files are inside the folder ${baseFolder}/${appName}/`);
+        alert(`Warning: None of the stored files are inside "${baseFolder}/${appName}/".`);
       }
 
       const content = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(content);
+
       const a = document.createElement('a');
-      a.href = url;
-      a.download = `${appName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.ipa`;
+      a.href = URL.createObjectURL(content);
+      a.download = 'app.ipa';
       a.click();
-      URL.revokeObjectURL(url);
+      URL.revokeObjectURL(a.href);
     };
 
-    // On load
     updateFileList();
   </script>
 </body>
