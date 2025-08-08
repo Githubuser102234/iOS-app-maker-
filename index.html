@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Configurable Local IPA Packager</title>
+<title>Local IPA Packager with .app Upload</title>
 <style>
   textarea { width: 100%; height: 120px; font-family: monospace; }
   input[type=text] { width: 100%; }
@@ -20,9 +20,17 @@
   <label for="appNameInput">App folder name (e.g. YourApp.app):</label><br/>
   <input type="text" id="appNameInput" value="YourApp.app" /><br/><br/>
 
+  <label><strong>Add regular files/folders:</strong></label><br/>
   <input type="file" id="fileInput" webkitdirectory multiple />
   <button id="addFilesBtn">Add Files/Folder to Storage</button>
-  <button id="clearStorageBtn" style="margin-left: 20px;">Clear Storage</button>
+  <br/><br/>
+
+  <label><strong>Or upload entire .app folder:</strong></label><br/>
+  <input type="file" id="appFolderInput" webkitdirectory multiple />
+  <button id="addAppFolderBtn">Add .app Folder to Storage</button>
+  <br/><br/>
+
+  <button id="clearStorageBtn" style="margin-left: 0;">Clear Storage</button>
   <hr />
 
   <h3>Create/Edit Text File</h3>
@@ -42,6 +50,8 @@
   <script>
     const fileInput = document.getElementById('fileInput');
     const addFilesBtn = document.getElementById('addFilesBtn');
+    const appFolderInput = document.getElementById('appFolderInput');
+    const addAppFolderBtn = document.getElementById('addAppFolderBtn');
     const clearStorageBtn = document.getElementById('clearStorageBtn');
     const downloadIpaBtn = document.getElementById('downloadIpaBtn');
     const fileList = document.getElementById('fileList');
@@ -89,11 +99,9 @@
     function buildFullPath(relativePath) {
       const baseFolder = baseFolderInput.value.trim() || 'Payload';
       const appName = appNameInput.value.trim() || 'YourApp.app';
-      // If relativePath already starts with baseFolder/appName, avoid double prefix
       if (relativePath.startsWith(baseFolder + '/' + appName)) {
         return relativePath;
       }
-      // Else prefix
       return `${baseFolder}/${appName}/${relativePath}`;
     }
 
@@ -105,7 +113,6 @@
       const storedFiles = loadStoredFiles();
 
       for (const file of fileInput.files) {
-        // file.webkitRelativePath includes folder structure relative to root folder you selected
         const relativePath = file.webkitRelativePath;
         const fullPath = buildFullPath(relativePath);
         const base64 = await fileToBase64(file);
@@ -116,6 +123,56 @@
       updateFileList();
       alert('Files/folders added to storage!');
       fileInput.value = '';
+    };
+
+    addAppFolderBtn.onclick = async () => {
+      if (!appFolderInput.files.length) {
+        alert('Select the .app folder first');
+        return;
+      }
+
+      // Determine the root .app folder name
+      // All files will share the same root folder at the start of webkitRelativePath
+      // e.g. MyApp.app/Info.plist or MyApp.app/Frameworks/... etc.
+      let rootAppFolderName = null;
+      for (const file of appFolderInput.files) {
+        const parts = file.webkitRelativePath.split('/');
+        if (parts.length > 0 && parts[0].endsWith('.app')) {
+          rootAppFolderName = parts[0];
+          break;
+        }
+      }
+      if (!rootAppFolderName) {
+        alert('Could not detect root .app folder name in selection!');
+        return;
+      }
+
+      // Update appNameInput with detected app folder name
+      appNameInput.value = rootAppFolderName;
+
+      const storedFiles = loadStoredFiles();
+
+      const baseFolder = baseFolderInput.value.trim() || 'Payload';
+
+      for (const file of appFolderInput.files) {
+        let relativePath = file.webkitRelativePath;
+        // Remove the root app folder name from path (to avoid doubling it)
+        // Because buildFullPath will add baseFolder/appName anyway
+        if (relativePath.startsWith(rootAppFolderName + '/')) {
+          relativePath = relativePath.substring(rootAppFolderName.length + 1);
+        } else if (relativePath === rootAppFolderName) {
+          // If it is the root app folder itself, skip (no file)
+          continue;
+        }
+        const fullPath = `${baseFolder}/${rootAppFolderName}/${relativePath}`;
+        const base64 = await fileToBase64(file);
+        storedFiles.push({ path: fullPath, base64 });
+      }
+
+      saveStoredFiles(storedFiles);
+      updateFileList();
+      alert(`.app folder "${rootAppFolderName}" added to storage!`);
+      appFolderInput.value = '';
     };
 
     addTextFileBtn.onclick = () => {
@@ -129,7 +186,6 @@
 
       const fullPath = buildFullPath(path);
 
-      // Convert text content to base64 (UTF-8)
       const base64 = btoa(unescape(encodeURIComponent(content)));
 
       storedFiles.push({ path: fullPath, base64 });
@@ -141,7 +197,7 @@
     };
 
     clearStorageBtn.onclick = () => {
-      if(confirm('Are you sure you want to clear all stored files? This cannot be undone.')) {
+      if (confirm('Are you sure you want to clear all stored files? This cannot be undone.')) {
         localStorage.removeItem(STORAGE_KEY);
         updateFileList();
         alert('Storage cleared.');
@@ -164,7 +220,6 @@
       const baseFolder = baseFolderInput.value.trim() || 'Payload';
       const appName = appNameInput.value.trim() || 'YourApp.app';
 
-      // Just to be sure, check that at least one file is inside baseFolder/appName folder
       const hasAppFolder = files.some(f => f.path.startsWith(baseFolder + '/' + appName + '/'));
       if (!hasAppFolder) {
         alert(`Warning: None of the files are inside the folder ${baseFolder}/${appName}/`);
@@ -174,7 +229,7 @@
       const url = URL.createObjectURL(content);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${appName.replace(/[^a-z0-9]/gi,'_').toLowerCase()}.ipa`;
+      a.download = `${appName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.ipa`;
       a.click();
       URL.revokeObjectURL(url);
     };
